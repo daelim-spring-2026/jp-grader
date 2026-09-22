@@ -33,7 +33,8 @@ import static org.junit.jupiter.api.Assertions.fail;
  */
 class Week04Test {
 
-    private static final String PKG = "org.example.domain.";
+    /** 수업 자료 패키지를 먼저 찾고, 없으면 대체 패키지를 찾는다. */
+    private static final String[] PKGS = {"org.example.ch04.", "org.example.domain."};
     private static final String URL = "jdbc:h2:mem:grade;DB_CLOSE_DELAY=-1";
 
     /** 테이블명(대문자) -> (컬럼명(대문자) -> 타입) */
@@ -59,10 +60,19 @@ class Week04Test {
 
             MetadataSources sources = new MetadataSources(registry);
             for (String n : new String[]{"Member", "Order", "OrderItem", "Item"}) {
-                try {
-                    sources.addAnnotatedClass(Class.forName(PKG + n));
-                } catch (ClassNotFoundException e) {
+                Class<?> found = null;
+                for (String pkg : PKGS) {
+                    try {
+                        found = Class.forName(pkg + n);
+                        break;
+                    } catch (ClassNotFoundException ignored) {
+                        // 다음 후보 패키지를 본다
+                    }
+                }
+                if (found == null) {
                     MISSING.add(n);
+                } else {
+                    sources.addAnnotatedClass(found);
                 }
             }
 
@@ -105,7 +115,8 @@ class Week04Test {
     private Map<String, String> 테이블(String table, String className) {
         부팅확인();
         if (MISSING.contains(className)) {
-            fail(PKG + className + " 클래스를 찾을 수 없습니다. 패키지가 org.example.domain 인지 확인하세요.");
+            fail(className + " 클래스를 찾을 수 없습니다."
+                    + " 패키지가 org.example.ch04 인지 확인하세요.");
         }
         Map<String, String> cols = SCHEMA.get(up(table));
         if (cols == null) {
