@@ -36,6 +36,8 @@ class Week04Test {
     /** 수업 자료 패키지를 먼저 찾고, 없으면 대체 패키지를 찾는다. */
     private static final String[] PKGS = {"org.example.ch04.", "org.example.domain."};
     private static final String URL = "jdbc:h2:mem:grade;DB_CLOSE_DELAY=-1";
+    /** 뒤 챕터에서 추가되는 엔티티. 없어도 되고, 있으면 같이 등록한다. */
+    private static final String[] OPTIONAL = {"Delivery", "Category"};
 
     /** 테이블명(대문자) -> (컬럼명(대문자) -> 타입) */
     private static final Map<String, Map<String, String>> SCHEMA = new LinkedHashMap<>();
@@ -73,6 +75,19 @@ class Week04Test {
                     MISSING.add(n);
                 } else {
                     sources.addAnnotatedClass(found);
+                }
+            }
+
+            // CH06 이후 Order -> Delivery, Item -> Category 를 참조하므로 있으면 같이 등록한다.
+            // 등록하지 않으면 "unknown entity" 로 부팅이 실패해 지난 챕터 항목까지 깨진다.
+            for (String n : OPTIONAL) {
+                for (String pkg : PKGS) {
+                    try {
+                        sources.addAnnotatedClass(Class.forName(pkg + n));
+                        break;
+                    } catch (ClassNotFoundException ignored) {
+                        // 아직 안 만든 챕터면 없어도 된다
+                    }
                 }
             }
 

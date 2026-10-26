@@ -69,7 +69,9 @@ class Week05Test {
                     .applySetting("hibernate.show_sql", "false")
                     .build();
             MetadataSources sources = new MetadataSources(registry);
-            for (Class<?> c : new Class<?>[]{MEMBER, ORDER, ORDER_ITEM, ITEM}) {
+            // CH06 이후 Order -> Delivery, Item -> Category 를 참조하므로 있으면 같이 등록한다.
+            // 등록하지 않으면 "unknown entity" 로 부팅이 실패해 지난 챕터 항목까지 깨진다.
+            for (Class<?> c : new Class<?>[]{MEMBER, ORDER, ORDER_ITEM, ITEM, find("Delivery"), find("Category")}) {
                 if (c != null) {
                     sources.addAnnotatedClass(c);
                 }
@@ -230,7 +232,7 @@ class Week05Test {
     private String 연결테이블힌트() throws Exception {
         List<String> extra = new ArrayList<>();
         for (String t : 테이블목록()) {
-            if (!Set.of("USERS", "ORDERS", "ORDER_ITEM", "ITEM").contains(t) && !t.startsWith("HIBERNATE")) {
+            if (!Set.of("USERS", "ORDERS", "ORDER_ITEM", "ITEM", "DELIVERY", "CATEGORY", "CATEGORY_ITEM").contains(t) && !t.startsWith("HIBERNATE")) {
                 extra.add(t);
             }
         }
