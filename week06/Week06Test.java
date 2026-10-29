@@ -4,6 +4,8 @@ import org.hibernate.SessionFactory;
 import org.hibernate.boot.MetadataSources;
 import org.hibernate.boot.registry.StandardServiceRegistry;
 import org.hibernate.boot.registry.StandardServiceRegistryBuilder;
+import org.hibernate.engine.spi.SessionFactoryImplementor;
+import org.hibernate.persister.entity.AbstractEntityPersister;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
@@ -11,6 +13,7 @@ import org.junit.jupiter.api.Test;
 
 import javax.persistence.EntityManager;
 import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.sql.Connection;
@@ -79,7 +82,9 @@ class Week06Test {
                     .applySetting("hibernate.show_sql", "false")
                     .build();
             MetadataSources sources = new MetadataSources(registry);
-            for (Class<?> c : new Class<?>[]{MEMBER, ORDER, ORDER_ITEM, ITEM, DELIVERY, CATEGORY}) {
+            // CH07 이후 Item 을 상속한 Album / Book / Movie 가 있으면 같이 등록한다.
+            for (Class<?> c : new Class<?>[]{MEMBER, ORDER, ORDER_ITEM, ITEM, DELIVERY, CATEGORY,
+                    find("Album"), find("Book"), find("Movie")}) {
                 if (c != null) {
                     sources.addAnnotatedClass(c);
                 }
@@ -185,9 +190,14 @@ class Week06Test {
 
     /** 컬럼명 -> 데이터 타입 */
     private Map<String, String> 컬럼목록(String table) throws Exception {
+        try (Connection c = conn()) {
+            return 컬럼목록(c, table);
+        }
+    }
+
+    private Map<String, String> 컬럼목록(Connection c, String table) throws Exception {
         Map<String, String> out = new LinkedHashMap<>();
-        try (Connection c = conn();
-             PreparedStatement ps = c.prepareStatement(
+        try (PreparedStatement ps = c.prepareStatement(
                      "SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS"
                              + " WHERE TABLE_SCHEMA = 'PUBLIC' AND TABLE_NAME = ?")) {
             ps.setString(1, table);
@@ -318,11 +328,99 @@ class Week06Test {
         데이터("카테고리/상품", (c, st) -> {
             st.executeUpdate("DELETE FROM CATEGORY_ITEM WHERE CATEGORY_ID = " + CATEGORY_ID);
             st.executeUpdate("DELETE FROM CATEGORY WHERE CATEGORY_ID = " + CATEGORY_ID);
-            st.executeUpdate("DELETE FROM ITEM WHERE ITEM_ID = " + ITEM_ID);
+            상품삭제(c, st, ITEM_ID);
             행넣기(c, "CATEGORY", 값("CATEGORY_ID", CATEGORY_ID, "NAME", "채점카테고리"));
-            행넣기(c, "ITEM", 값("ITEM_ID", ITEM_ID, "NAME", "채점상품"));
+            상품넣기(c, ITEM_ID, 값("NAME", "채점상품"));
             행넣기(c, "CATEGORY_ITEM", 값("CATEGORY_ID", CATEGORY_ID, "ITEM_ID", ITEM_ID));
         });
+    }
+
+    // ---- CH07 상속 대응 ----
+
+    private static final String[] ITEM_CHILDREN = {"Album", "Book", "Movie"};
+
+    /**
+     * 상품 행을 넣을 때 쓸 엔티티. Item 이 추상 클래스(CH07 상속)면 자식 중 첫 번째 구체 클래스를 고른다.
+     * ITEM 에만 행을 넣으면 구분 컬럼(DTYPE)이 비거나, 추상 클래스를 만들 수 없어 읽기가 실패하기 때문이다.
+     */
+    private AbstractEntityPersister 상품퍼시스터() {
+        List<Class<?>> candidates = new ArrayList<>();
+        if (!Modifier.isAbstract(ITEM.getModifiers())) {
+            candidates.add(ITEM);
+        }
+        for (String n : ITEM_CHILDREN) {
+            Class<?> c = find(n);
+            if (c != null && ITEM.isAssignableFrom(c) && !Modifier.isAbstract(c.getModifiers())) {
+                candidates.add(c);
+            }
+        }
+        for (Class<?> c : candidates) {
+            try {
+                return (AbstractEntityPersister) sf.unwrap(SessionFactoryImplementor.class)
+                        .getMetamodel().entityPersister(c);
+            } catch (RuntimeException ignored) {
+                // 엔티티로 등록되지 않은 클래스
+            }
+        }
+        return null;
+    }
+
+    private String 기본키컬럼(Connection c, String table) throws Exception {
+        try (PreparedStatement ps = c.prepareStatement(
+                "SELECT kcu.COLUMN_NAME FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc"
+                        + " JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu ON kcu.CONSTRAINT_NAME = tc.CONSTRAINT_NAME"
+                        + " WHERE tc.TABLE_NAME = ? AND tc.CONSTRAINT_TYPE = 'PRIMARY KEY'")) {
+            ps.setString(1, table);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? up(rs.getString(1)) : "ITEM_ID";
+            }
+        }
+    }
+
+    /** 조인 전략(JOINED)이면 자식 테이블(ALBUM 등) 이름들. 단일 테이블 전략이면 비어 있다. */
+    private Set<String> 상품자식테이블() {
+        Set<String> out = new LinkedHashSet<>();
+        for (String n : ITEM_CHILDREN) {
+            Class<?> c = find(n);
+            if (c == null || !ITEM.isAssignableFrom(c)) {
+                continue;
+            }
+            try {
+                String t = up(((AbstractEntityPersister) sf.unwrap(SessionFactoryImplementor.class)
+                        .getMetamodel().entityPersister(c)).getTableName());
+                if (!t.equals("ITEM")) {
+                    out.add(t);
+                }
+            } catch (RuntimeException ignored) {
+                // 엔티티로 등록되지 않은 클래스
+            }
+        }
+        return out;
+    }
+
+    private void 상품삭제(Connection c, Statement st, long id) throws Exception {
+        for (String t : 상품자식테이블()) {
+            st.executeUpdate("DELETE FROM " + t + " WHERE " + 기본키컬럼(c, t) + " = " + id);
+        }
+        st.executeUpdate("DELETE FROM ITEM WHERE ITEM_ID = " + id);
+    }
+
+    private void 상품넣기(Connection c, long id, Map<String, Object> values) throws Exception {
+        Map<String, Object> row = new LinkedHashMap<>(values);
+        row.put("ITEM_ID", id);
+        AbstractEntityPersister p = 상품퍼시스터();
+        if (p != null) {
+            String dcol = up(p.getDiscriminatorColumnName());
+            Object dval = p.getDiscriminatorSQLValue();
+            if (!dcol.isEmpty() && dval != null && 컬럼목록(c, "ITEM").containsKey(dcol)) {
+                row.put(dcol, dval.toString().replaceAll("^'|'$", ""));
+            }
+        }
+        행넣기(c, "ITEM", row);
+        if (p != null && !up(p.getTableName()).equals("ITEM")) {
+            String t = up(p.getTableName());
+            행넣기(c, t, 값(기본키컬럼(c, t), id));
+        }
     }
 
     private static Field 타입필드(Class<?> owner, Class<?> type) {
@@ -387,8 +485,9 @@ class Week06Test {
     private String 추가테이블힌트() throws Exception {
         List<String> extra = new ArrayList<>();
         Set<String> known = Set.of("USERS", "ORDERS", "ORDER_ITEM", "ITEM", "DELIVERY", "CATEGORY", "CATEGORY_ITEM");
+        Set<String> children = 상품자식테이블();
         for (String t : 테이블목록()) {
-            if (!known.contains(t) && !t.startsWith("HIBERNATE")) {
+            if (!known.contains(t) && !children.contains(t) && !t.startsWith("HIBERNATE")) {
                 extra.add(t);
             }
         }
